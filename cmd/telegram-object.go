@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/gotd/td/telegram/downloader"
@@ -39,6 +39,11 @@ type ObjectMetadata struct {
 
 // PutObject uploads an object to Telegram and stores metadata in PostgreSQL
 func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object string, data *PutObjReader, opts ObjectOptions) (objInfo ObjectInfo, err error) {
+	// 1. Intercept system buckets and route them to local disk
+	if t.isSystemBucket(bucket) {
+		return t.putLocalObject(ctx, bucket, object, data)
+	}
+
 	// Wait for Telegram client to be ready
 	if err := t.tgReady(ctx); err != nil {
 		return ObjectInfo{}, err
@@ -50,11 +55,9 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 	var msgIDs []int
 	var internalData []byte
 
-	// Filter internal MinIO metadata and small files to avoid Telegram rate limits and "Unknown Track" spam.
-	// We store files < 500KB, internal buckets, or dot-files (metadata) directly in PostgreSQL.
-	isInternal := isMinioMetaBucketName(bucket) || isMinioReservedBucket(bucket) || strings.HasPrefix(object, ".")
-	if isInternal || (size > 0 && size < 500000) {
-		// Store internal/small data only in PostgreSQL
+	// 2. Filter small files to avoid Telegram rate limits and "Unknown Track" spam.
+	// We store files < 500KB (or empty 0-byte files) directly in PostgreSQL.
+	if size < 500000 {
 		internalData, err = io.ReadAll(reader)
 		if err != nil {
 			return ObjectInfo{}, fmt.Errorf("failed to read internal/small data: %w", err)
@@ -148,7 +151,7 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 		}
 	}
 
-	// 2. Store Metadata in PostgreSQL
+	// 3. Store Metadata in PostgreSQL
 	meta := ObjectMetadata{
 		Bucket:      bucket,
 		Key:         object,
@@ -166,9 +169,9 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 
 	// Upsert implementation for Postgres
 	query := `
-		INSERT INTO objects (bucket, key, metadata, data) 
+		INSERT INTO objects (bucket, key, metadata, data)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (bucket, key) 
+		ON CONFLICT (bucket, key)
 		DO UPDATE SET metadata = EXCLUDED.metadata, data = EXCLUDED.data
 	`
 	if _, err := t.db.ExecContext(ctx, query, bucket, object, metaBytes, internalData); err != nil {
@@ -187,6 +190,19 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 
 // GetObjectNInfo returns a reader for the object
 func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object string, rs *HTTPRangeSpec, h http.Header, opts ObjectOptions) (gr *GetObjectReader, err error) {
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		info, err := t.statLocalObject(ctx, bucket, object)
+		if err != nil {
+			return nil, err
+		}
+		f, err := os.Open(t.getLocalPath(bucket, object))
+		if err != nil {
+			return nil, err
+		}
+		return NewGetObjectReaderFromReader(f, info, opts)
+	}
+
 	// Wait for Telegram client to be ready
 	if err := t.tgReady(ctx); err != nil {
 		return nil, err
@@ -215,7 +231,7 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 		ContentType: meta.ContentType,
 	}
 
-	// If data is stored in PostgreSQL (internal metadata), serve it directly
+	// If data is stored in PostgreSQL (small file), serve it directly
 	if len(internalData) > 0 {
 		return NewGetObjectReaderFromReader(bytes.NewReader(internalData), objInfo, opts)
 	}
@@ -332,6 +348,11 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 
 // DeleteObject deletes object from Telegram and Redis
 func (t *TelegramObjectLayer) DeleteObject(ctx context.Context, bucket, object string, opts ObjectOptions) (ObjectInfo, error) {
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		return t.deleteLocalObject(ctx, bucket, object)
+	}
+
 	var metaBytes []byte
 	err := t.db.QueryRowContext(ctx, "SELECT metadata FROM objects WHERE bucket=$1 AND key=$2", bucket, object).Scan(&metaBytes)
 	if err == sql.ErrNoRows {
@@ -359,6 +380,11 @@ func (t *TelegramObjectLayer) DeleteObject(ctx context.Context, bucket, object s
 
 // GetObjectInfo reads object metadata
 func (t *TelegramObjectLayer) GetObjectInfo(ctx context.Context, bucket, object string, opts ObjectOptions) (objInfo ObjectInfo, err error) {
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		return t.statLocalObject(ctx, bucket, object)
+	}
+
 	var metaBytes []byte
 	err = t.db.QueryRowContext(ctx, "SELECT metadata FROM objects WHERE bucket=$1 AND key=$2", bucket, object).Scan(&metaBytes)
 	if err == sql.ErrNoRows {
@@ -384,9 +410,11 @@ func (t *TelegramObjectLayer) GetObjectInfo(ctx context.Context, bucket, object 
 
 // ListObjects lists objects
 func (t *TelegramObjectLayer) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (ListObjectsInfo, error) {
-	// Simple prefix search using LIKE
-	// Note: This does not implement marker/delimiter logic correctly for full S3 compliance
-	// but suffices for this basic layer.
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		return t.listLocalObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
+	}
+
 	query := "SELECT metadata FROM objects WHERE bucket=$1 AND key LIKE $2 LIMIT $3"
 	rows, err := t.db.QueryContext(ctx, query, bucket, prefix+"%", maxKeys)
 	if err != nil {
@@ -419,7 +447,14 @@ func (t *TelegramObjectLayer) ListObjects(ctx context.Context, bucket, prefix, m
 
 // ListObjectsV2 lists objects using the V2 protocol
 func (t *TelegramObjectLayer) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (ListObjectsV2Info, error) {
-	// Reuse ListObjects logic or implement V2 specifics
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		info, err := t.listLocalObjects(ctx, bucket, prefix, continuationToken, delimiter, maxKeys)
+		return ListObjectsV2Info{
+			Objects:     info.Objects,
+			IsTruncated: info.IsTruncated,
+		}, err
+	}
 	return ListObjectsV2Info{}, NotImplemented{}
 }
 
@@ -448,6 +483,33 @@ func (t *TelegramObjectLayer) ListObjectVersions(ctx context.Context, bucket, pr
 // Walk traverses the object namespace
 func (t *TelegramObjectLayer) Walk(ctx context.Context, bucket, prefix string, results chan<- itemOrErr[ObjectInfo], opts WalkOptions) error {
 	defer close(results)
+
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		searchDir := filepath.Join(t.LocalDiskPath, bucket, prefix)
+		err := filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // ignore errors
+			}
+			if !info.IsDir() {
+				relPath, _ := filepath.Rel(filepath.Join(t.LocalDiskPath, bucket), path)
+				select {
+				case results <- itemOrErr[ObjectInfo]{
+					Item: ObjectInfo{
+						Bucket:  bucket,
+						Name:    relPath,
+						Size:    info.Size(),
+						ModTime: info.ModTime(),
+					},
+				}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		})
+		return err
+	}
 
 	query := "SELECT metadata FROM objects WHERE bucket=$1 AND key LIKE $2"
 	rows, err := t.db.QueryContext(ctx, query, bucket, prefix+"%")

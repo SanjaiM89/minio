@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"database/sql"
+	"os"
 	"time"
 
 	"github.com/minio/minio/internal/bucket/versioning"
@@ -10,6 +11,11 @@ import (
 
 // MakeBucket creates a new bucket in the Telegram backend
 func (t *TelegramObjectLayer) MakeBucket(ctx context.Context, bucket string, opts MakeBucketOptions) error {
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		return os.MkdirAll(t.getLocalPath(bucket, ""), 0755)
+	}
+
 	_, err := t.db.ExecContext(ctx, "INSERT INTO buckets (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", bucket)
 	if err != nil {
 		return err
@@ -19,6 +25,18 @@ func (t *TelegramObjectLayer) MakeBucket(ctx context.Context, bucket string, opt
 
 // GetBucketInfo returns bucket metadata
 func (t *TelegramObjectLayer) GetBucketInfo(ctx context.Context, bucket string, opts BucketOptions) (BucketInfo, error) {
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		fi, err := os.Stat(t.getLocalPath(bucket, ""))
+		if err != nil {
+			return BucketInfo{}, BucketNotFound{Bucket: bucket}
+		}
+		return BucketInfo{
+			Name:    bucket,
+			Created: fi.ModTime(),
+		}, nil
+	}
+
 	var created time.Time
 	err := t.db.QueryRowContext(ctx, "SELECT created_at FROM buckets WHERE name = $1", bucket).Scan(&created)
 	if err == sql.ErrNoRows {
@@ -35,6 +53,8 @@ func (t *TelegramObjectLayer) GetBucketInfo(ctx context.Context, bucket string, 
 
 // ListBuckets lists all buckets
 func (t *TelegramObjectLayer) ListBuckets(ctx context.Context, opts BucketOptions) ([]BucketInfo, error) {
+	// We only want to list real user buckets from PostgreSQL
+	// MinIO system buckets are meant to be hidden from the S3 list API anyway
 	rows, err := t.db.QueryContext(ctx, "SELECT name, created_at FROM buckets")
 	if err != nil {
 		return nil, err
@@ -58,6 +78,11 @@ func (t *TelegramObjectLayer) ListBuckets(ctx context.Context, opts BucketOption
 
 // DeleteBucket deletes a bucket if empty
 func (t *TelegramObjectLayer) DeleteBucket(ctx context.Context, bucket string, opts DeleteBucketOptions) error {
+	// Intercept system buckets to local disk
+	if t.isSystemBucket(bucket) {
+		return os.RemoveAll(t.getLocalPath(bucket, ""))
+	}
+
 	// Check if bucket is empty
 	var count int
 	err := t.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM objects WHERE bucket = $1", bucket).Scan(&count)
