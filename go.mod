@@ -34,7 +34,7 @@ require (
 	github.com/fraugster/parquet-go v0.12.0
 	github.com/go-ldap/ldap/v3 v3.4.11
 	github.com/go-openapi/loads v0.22.0
-// 	github.com/go-redis/redis/v8 v8.11.5
+	// 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/go-sql-driver/mysql v1.9.2
 	github.com/gobwas/ws v1.4.0
 	github.com/golang-jwt/jwt/v4 v4.5.2
@@ -49,7 +49,7 @@ require (
 	github.com/klauspost/pgzip v1.2.6
 	github.com/klauspost/readahead v1.4.0
 	github.com/klauspost/reedsolomon v1.12.4
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.11.2
 	github.com/lithammer/shortuuid/v4 v4.2.0
 	github.com/miekg/dns v1.1.65
 	github.com/minio/cli v1.24.2
@@ -144,7 +144,7 @@ require (
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-// 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	// 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/eapache/go-resiliency v1.7.0 // indirect

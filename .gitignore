@@ -57,3 +57,5 @@ xl-meta
 .env
 node_modules/
 minio_tg
+minio-telegram
+minio-telegram.exe

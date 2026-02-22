@@ -5,19 +5,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/message"
-	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
-	"github.com/minio/madmin-go/v3"
 )
 
 // MaxTelegramChunkSize is the maximum size of a single Telegram file upload
@@ -37,11 +34,10 @@ type ObjectMetadata struct {
 	ModTime     time.Time `json:"mod_time"`
 }
 
-// PutObject uploads an object to Telegram and stores metadata in PostgreSQL
 func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object string, data *PutObjReader, opts ObjectOptions) (objInfo ObjectInfo, err error) {
-	// 1. Intercept system buckets and route them to local disk
+	// Delegate system files to native MinIO!
 	if t.isSystemBucket(bucket) {
-		return t.putLocalObject(ctx, bucket, object, data)
+		return t.base.PutObject(ctx, bucket, object, data, opts)
 	}
 
 	// Wait for Telegram client to be ready
@@ -49,109 +45,85 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 		return ObjectInfo{}, err
 	}
 
-	reader := data.Reader
-	size := data.Size()
+	tmpFile, err := os.CreateTemp("", "minio-tg-upload-*") // Use default temp dir
+	if err != nil {
+		return ObjectInfo{}, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempFilePath := tmpFile.Name()
+	defer os.Remove(tempFilePath)
+
+	size, err := io.Copy(tmpFile, data.Reader)
+	if err != nil {
+		tmpFile.Close()
+		return ObjectInfo{}, fmt.Errorf("failed to copy data to temp file: %w", err)
+	}
+	tmpFile.Close()
 
 	var msgIDs []int
 	var internalData []byte
 
-	// 2. Filter small files to avoid Telegram rate limits and "Unknown Track" spam.
-	// We store files < 500KB (or empty 0-byte files) directly in PostgreSQL.
 	if size < 500000 {
-		internalData, err = io.ReadAll(reader)
+		internalData, err = os.ReadFile(tempFilePath)
 		if err != nil {
 			return ObjectInfo{}, fmt.Errorf("failed to read internal/small data: %w", err)
 		}
-		size = int64(len(internalData))
 	} else {
-		// Initialize uploader with 16 threads for maximum speed
-		u := uploader.NewUploader(t.tgClient.API()).WithThreads(16)
-		sender := message.NewSender(t.tgClient.API()).WithUploader(u)
-		// Use InputPeerChannel directly to avoid gotd's peer resolver
-		// mis-parsing "channel#ID" (the # is treated as a URL fragment).
-		target := sender.To(&tg.InputPeerChannel{
-			ChannelID:  t.config.BareChannelID,
-			AccessHash: t.channelAccessHash,
-		})
+		reopenedFile, err := os.Open(tempFilePath)
+		if err != nil {
+			return ObjectInfo{}, fmt.Errorf("failed to open temp file for telegram upload: %w", err)
+		}
+		defer reopenedFile.Close()
 
+		var jobs []uploadJob
+		var resultChans []chan uploadResult
 		remaining := size
 		partNum := 0
 
+		// First, create all the jobs for the chunks
 		for remaining > 0 {
 			chunkSize := remaining
 			if chunkSize > MaxTelegramChunkSize {
 				chunkSize = MaxTelegramChunkSize
 			}
-
 			partNum++
-			partName := fmt.Sprintf("%s.part%d", object, partNum)
 
-			// Use LimitReader to read only the chunk size
-			limitedReader := io.LimitReader(reader, chunkSize)
-
-			// Upload chunk
-			upload, err := u.Upload(ctx, uploader.NewUpload(partName, limitedReader, chunkSize))
-			if err != nil {
-				return ObjectInfo{}, fmt.Errorf("telegram upload failed for part %d: %w", partNum, err)
+			offset := size - remaining
+			resultChan := make(chan uploadResult, 1)
+			job := uploadJob{
+				ctx:        ctx,
+				partName:   fmt.Sprintf("%s.part%d", object, partNum),
+				reader:     io.NewSectionReader(reopenedFile, offset, chunkSize),
+				size:       chunkSize,
+				resultChan: resultChan,
 			}
 
-			// Send message with chunk, respecting FloodWait rate limits
-			var msgUpdates tg.UpdatesClass
-			for retries := 0; retries < 15; retries++ {
-				msgUpdates, err = target.File(ctx, upload)
-				if err == nil {
-					break
-				}
-				if d, ok := tgerr.AsFloodWait(err); ok {
-					fmt.Printf("Rate limited by Telegram (Flood Wait), sleeping for %v...\n", d)
-					time.Sleep(d + time.Second) // Add 1s buffer
-					continue
-				}
-				// For non-flood errors, wait a short bit on the first few retries in case it's a momentary network issue
-				if retries < 3 {
-					time.Sleep(2 * time.Second)
-					continue
-				}
-				break
-			}
-
-			if err != nil {
-				return ObjectInfo{}, fmt.Errorf("telegram send failed for part %d after retries: %w", partNum, err)
-			}
-
-			// Robust Message ID Extraction for channels
-			msgID := 0
-			switch upds := msgUpdates.(type) {
-			case *tg.Updates:
-				for _, upd := range upds.Updates {
-					switch u := upd.(type) {
-					case *tg.UpdateNewMessage:
-						if m, ok := u.Message.(*tg.Message); ok {
-							msgID = m.ID
-						}
-					case *tg.UpdateNewChannelMessage:
-						if m, ok := u.Message.(*tg.Message); ok {
-							msgID = m.ID
-						}
-					}
-					if msgID != 0 {
-						break
-					}
-				}
-			case *tg.UpdateShortSentMessage:
-				msgID = upds.ID
-			}
-
-			if msgID == 0 {
-				return ObjectInfo{}, fmt.Errorf("failed to extract message ID for part %d", partNum)
-			}
-
-			msgIDs = append(msgIDs, msgID)
+			jobs = append(jobs, job)
+			resultChans = append(resultChans, resultChan)
 			remaining -= chunkSize
+		}
+
+		// Send all jobs to the queue
+		for _, job := range jobs {
+			t.uploadQueue <- job
+		}
+
+		// Wait for all jobs to complete and collect the results
+		for _, resChan := range resultChans {
+			select {
+			case result := <-resChan:
+				if result.err != nil {
+					// The request context will be canceled on return, which should signal
+					// other workers to stop, but there might be a race.
+					return ObjectInfo{}, fmt.Errorf("upload worker failed for part: %w", result.err)
+				}
+				msgIDs = append(msgIDs, result.msgID)
+			case <-ctx.Done():
+				// The client cancelled the request
+				return ObjectInfo{}, ctx.Err()
+			}
 		}
 	}
 
-	// 3. Store Metadata in PostgreSQL
 	meta := ObjectMetadata{
 		Bucket:      bucket,
 		Key:         object,
@@ -167,7 +139,6 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 
 	metaBytes, _ := json.Marshal(meta)
 
-	// Upsert implementation for Postgres
 	query := `
 		INSERT INTO objects (bucket, key, metadata, data)
 		VALUES ($1, $2, $3, $4)
@@ -188,19 +159,10 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 	}, nil
 }
 
-// GetObjectNInfo returns a reader for the object
 func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object string, rs *HTTPRangeSpec, h http.Header, opts ObjectOptions) (gr *GetObjectReader, err error) {
-	// Intercept system buckets to local disk
+	// Delegate system files to native MinIO!
 	if t.isSystemBucket(bucket) {
-		info, err := t.statLocalObject(ctx, bucket, object)
-		if err != nil {
-			return nil, err
-		}
-		f, err := os.Open(t.getLocalPath(bucket, object))
-		if err != nil {
-			return nil, err
-		}
-		return NewGetObjectReaderFromReader(f, info, opts)
+		return t.base.GetObjectNInfo(ctx, bucket, object, rs, h, opts)
 	}
 
 	// Wait for Telegram client to be ready
@@ -231,7 +193,6 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 		ContentType: meta.ContentType,
 	}
 
-	// If data is stored in PostgreSQL (small file), serve it directly
 	if len(internalData) > 0 {
 		return NewGetObjectReaderFromReader(bytes.NewReader(internalData), objInfo, opts)
 	}
@@ -239,23 +200,16 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 	pr, pw := io.Pipe()
 
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				pw.CloseWithError(fmt.Errorf("panic in download goroutine: %v", r))
-			} else {
-				pw.Close()
-			}
-		}()
+		defer pw.Close()
 
 		api := t.tgClient.API()
-		// Initialize downloader
 		d := downloader.NewDownloader()
 
 		for _, msgID := range meta.Parts {
-			// Get message to find the document, with FloodWait handling
 			var resp tg.MessagesMessagesClass
 			var getErr error
 			for retries := 0; retries < 10; retries++ {
+				t.hashMu.RLock()
 				resp, getErr = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 					Channel: &tg.InputChannel{
 						ChannelID:  t.config.BareChannelID,
@@ -265,11 +219,11 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 						&tg.InputMessageID{ID: msgID},
 					},
 				})
+				t.hashMu.RUnlock()
 				if getErr == nil {
 					break
 				}
 				if d, ok := tgerr.AsFloodWait(getErr); ok {
-					fmt.Printf("Download rate limited (Flood Wait), sleeping %v...\n", d)
 					time.Sleep(d + time.Second)
 					continue
 				}
@@ -313,31 +267,14 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 				return
 			}
 
-			// For parallel download, we need a WriterAt.
-			// We'll create a temporary file for this part.
-			tmpFile, err := os.CreateTemp("", "minio-tg-part-*")
+			// Download the document and stream it directly to the pipe writer.
+			// This avoids saving the chunk to a temporary file on disk.
+			_, err = d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, pw)
 			if err != nil {
-				pw.CloseWithError(fmt.Errorf("failed to create temp file: %w", err))
-				return
-			}
-			tmpName := tmpFile.Name()
-			defer os.Remove(tmpName)
-			defer tmpFile.Close()
-
-			// Download the document in parallel (16 threads)
-			_, err = d.Download(api, doc.AsInputDocumentFileLocation()).WithThreads(16).Parallel(ctx, tmpFile)
-			if err != nil {
-				pw.CloseWithError(fmt.Errorf("parallel download failed for message %d: %w", msgID, err))
-				return
-			}
-
-			// Stream the part from temp file to the pipe
-			if _, err := tmpFile.Seek(0, 0); err != nil {
-				pw.CloseWithError(fmt.Errorf("failed to seek temp file: %w", err))
-				return
-			}
-			if _, err := io.Copy(pw, tmpFile); err != nil {
-				pw.CloseWithError(fmt.Errorf("failed to stream part from temp file: %w", err))
+				// The pipe might be closed by the reader, which is not a server error.
+				if !errors.Is(err, io.ErrClosedPipe) {
+					pw.CloseWithError(fmt.Errorf("streaming download failed for message %d: %w", msgID, err))
+				}
 				return
 			}
 		}
@@ -346,29 +283,32 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 	return NewGetObjectReaderFromReader(pr, objInfo, opts)
 }
 
-// DeleteObject deletes object from Telegram and Redis
 func (t *TelegramObjectLayer) DeleteObject(ctx context.Context, bucket, object string, opts ObjectOptions) (ObjectInfo, error) {
-	// Intercept system buckets to local disk
 	if t.isSystemBucket(bucket) {
-		return t.deleteLocalObject(ctx, bucket, object)
+		return t.base.DeleteObject(ctx, bucket, object, opts)
 	}
 
 	var metaBytes []byte
 	err := t.db.QueryRowContext(ctx, "SELECT metadata FROM objects WHERE bucket=$1 AND key=$2", bucket, object).Scan(&metaBytes)
 	if err == sql.ErrNoRows {
-		return ObjectInfo{}, ObjectNotFound{Bucket: bucket, Object: object}
+		// MinIO expects an empty ObjectInfo on successful delete of a non-existent object
+		return ObjectInfo{}, nil
 	}
 
 	var meta ObjectMetadata
 	json.Unmarshal(metaBytes, &meta)
 
-	// Delete from Postgres
 	t.db.ExecContext(ctx, "DELETE FROM objects WHERE bucket=$1 AND key=$2", bucket, object)
 
-	// Delete from Telegram (Async/Best effort)
 	if len(meta.Parts) > 0 {
 		go func() {
-			// t.tgClient.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{ID: meta.Parts})
+			t.hashMu.RLock()
+			// Best effort deletion
+			t.tgClient.API().ChannelsDeleteMessages(context.Background(), &tg.ChannelsDeleteMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: t.config.BareChannelID, AccessHash: t.channelAccessHash},
+				ID:      meta.Parts,
+			})
+			t.hashMu.RUnlock()
 		}()
 	}
 
@@ -378,11 +318,9 @@ func (t *TelegramObjectLayer) DeleteObject(ctx context.Context, bucket, object s
 	}, nil
 }
 
-// GetObjectInfo reads object metadata
 func (t *TelegramObjectLayer) GetObjectInfo(ctx context.Context, bucket, object string, opts ObjectOptions) (objInfo ObjectInfo, err error) {
-	// Intercept system buckets to local disk
 	if t.isSystemBucket(bucket) {
-		return t.statLocalObject(ctx, bucket, object)
+		return t.base.GetObjectInfo(ctx, bucket, object, opts)
 	}
 
 	var metaBytes []byte
@@ -408,21 +346,16 @@ func (t *TelegramObjectLayer) GetObjectInfo(ctx context.Context, bucket, object 
 	}, nil
 }
 
-// ListObjects lists objects
 func (t *TelegramObjectLayer) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (ListObjectsInfo, error) {
-	// Intercept system buckets to local disk
-	if t.isSystemBucket(bucket) {
-		return t.listLocalObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
-	}
-
-	query := "SELECT metadata FROM objects WHERE bucket=$1 AND key LIKE $2 LIMIT $3"
-	rows, err := t.db.QueryContext(ctx, query, bucket, prefix+"%", maxKeys)
+	query := "SELECT metadata FROM objects WHERE bucket=$1 AND key LIKE $2 AND key > $3 ORDER BY key ASC LIMIT $4"
+	rows, err := t.db.QueryContext(ctx, query, bucket, prefix+"%", marker, maxKeys)
 	if err != nil {
 		return ListObjectsInfo{}, err
 	}
 	defer rows.Close()
 
 	var objects []ObjectInfo
+	var lastKey string
 	for rows.Next() {
 		var metaBytes []byte
 		if err := rows.Scan(&metaBytes); err != nil {
@@ -437,115 +370,70 @@ func (t *TelegramObjectLayer) ListObjects(ctx context.Context, bucket, prefix, m
 				ModTime: meta.ModTime,
 				ETag:    meta.ETag,
 			})
+			lastKey = meta.Key
 		}
 	}
 
+	isTruncated := len(objects) == maxKeys
+	var nextMarker string
+	if isTruncated {
+		nextMarker = lastKey
+	}
+
 	return ListObjectsInfo{
-		Objects: objects,
+		Objects:     objects,
+		IsTruncated: isTruncated,
+		NextMarker:  nextMarker,
 	}, nil
 }
 
-// ListObjectsV2 lists objects using the V2 protocol
 func (t *TelegramObjectLayer) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (ListObjectsV2Info, error) {
-	// Intercept system buckets to local disk
 	if t.isSystemBucket(bucket) {
-		info, err := t.listLocalObjects(ctx, bucket, prefix, continuationToken, delimiter, maxKeys)
-		return ListObjectsV2Info{
-			Objects:     info.Objects,
-			IsTruncated: info.IsTruncated,
-		}, err
+		return t.base.ListObjectsV2(ctx, bucket, prefix, continuationToken, delimiter, maxKeys, fetchOwner, startAfter)
 	}
-	return ListObjectsV2Info{}, NotImplemented{}
+
+	// Use the V1 list implementation
+	info, err := t.ListObjects(ctx, bucket, prefix, continuationToken, delimiter, maxKeys)
+	if err != nil {
+		return ListObjectsV2Info{}, err
+	}
+
+	return ListObjectsV2Info{
+		Objects:               info.Objects,
+		IsTruncated:           info.IsTruncated,
+		NextContinuationToken: info.NextMarker,
+	}, nil
 }
 
-// CopyObject copies an object from source to destination
+// These functions are not needed for the telegram backend, but are required by the ObjectLayer interface.
+// The embedded base layer will handle them for system buckets.
+// For user buckets, we can return NotImplemented or a sensible default.
+
 func (t *TelegramObjectLayer) CopyObject(ctx context.Context, srcBucket, srcObject, destBucket, destObject string, srcInfo ObjectInfo, srcOpts, dstOpts ObjectOptions) (ObjectInfo, error) {
+	if t.isSystemBucket(srcBucket) && t.isSystemBucket(destBucket) {
+		return t.base.CopyObject(ctx, srcBucket, srcObject, destBucket, destObject, srcInfo, srcOpts, dstOpts)
+	}
 	return ObjectInfo{}, NotImplemented{}
 }
 
-// DeleteObjects deletes multiple objects in a single batch
 func (t *TelegramObjectLayer) DeleteObjects(ctx context.Context, bucket string, objects []ObjectToDelete, opts ObjectOptions) ([]DeletedObject, []error) {
+	if t.isSystemBucket(bucket) {
+		return t.base.DeleteObjects(ctx, bucket, objects, opts)
+	}
 	errs := make([]error, len(objects))
 	dobjects := make([]DeletedObject, len(objects))
 	for i, obj := range objects {
-		_, err := t.DeleteObject(ctx, bucket, obj.ObjectName, opts)
-		errs[i] = err
-		dobjects[i] = DeletedObject{ObjectName: obj.ObjectName}
+		_, errs[i] = t.DeleteObject(ctx, bucket, obj.ObjectName, opts)
+		if errs[i] == nil {
+			dobjects[i] = DeletedObject{ObjectName: obj.ObjectName}
+		}
 	}
 	return dobjects, errs
 }
 
-// ListObjectVersions lists all versions of an object
 func (t *TelegramObjectLayer) ListObjectVersions(ctx context.Context, bucket, prefix, marker, versionMarker, delimiter string, maxKeys int) (ListObjectVersionsInfo, error) {
-	return ListObjectVersionsInfo{}, NotImplemented{}
-}
-
-// Walk traverses the object namespace
-func (t *TelegramObjectLayer) Walk(ctx context.Context, bucket, prefix string, results chan<- itemOrErr[ObjectInfo], opts WalkOptions) error {
-	defer close(results)
-
-	// Intercept system buckets to local disk
 	if t.isSystemBucket(bucket) {
-		searchDir := filepath.Join(t.LocalDiskPath, bucket, prefix)
-		err := filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil // ignore errors
-			}
-			if !info.IsDir() {
-				relPath, _ := filepath.Rel(filepath.Join(t.LocalDiskPath, bucket), path)
-				select {
-				case results <- itemOrErr[ObjectInfo]{
-					Item: ObjectInfo{
-						Bucket:  bucket,
-						Name:    relPath,
-						Size:    info.Size(),
-						ModTime: info.ModTime(),
-					},
-				}:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			return nil
-		})
-		return err
+		return t.base.ListObjectVersions(ctx, bucket, prefix, marker, versionMarker, delimiter, maxKeys)
 	}
-
-	query := "SELECT metadata FROM objects WHERE bucket=$1 AND key LIKE $2"
-	rows, err := t.db.QueryContext(ctx, query, bucket, prefix+"%")
-	if err != nil {
-		results <- itemOrErr[ObjectInfo]{Err: err}
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var metaBytes []byte
-		if err := rows.Scan(&metaBytes); err != nil {
-			continue
-		}
-		var meta ObjectMetadata
-		if err := json.Unmarshal(metaBytes, &meta); err == nil {
-			select {
-			case results <- itemOrErr[ObjectInfo]{
-				Item: ObjectInfo{
-					Bucket:      meta.Bucket,
-					Name:        meta.Key,
-					Size:        meta.Size,
-					ModTime:     meta.ModTime,
-					ETag:        meta.ETag,
-					ContentType: meta.ContentType,
-				},
-			}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-	return nil
-}
-
-// HealObjectsV2 heals objects in a bucket using the V2 protocol
-func (t *TelegramObjectLayer) HealObjectsV2(ctx context.Context, bucket, prefix string, opts madmin.HealOpts, fn HealObjectFn) error {
-	return NotImplemented{}
+	return ListObjectVersionsInfo{}, nil // No versioning for telegram backend
 }

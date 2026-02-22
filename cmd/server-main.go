@@ -1196,10 +1196,18 @@ func serverMain(ctx *cli.Context) {
 }
 
 // Initialize object layer with the supplied disks, objectLayer is nil upon any error.
-// Initialize object layer with the supplied disks, objectLayer is nil upon any error.
 func newObjectLayer(ctx context.Context, endpointServerPools EndpointServerPools) (newObject ObjectLayer, err error) {
-	if os.Getenv("MINIO_TELEGRAM_ENABLED") == "on" {
-		return NewTelegramObjectLayer(ctx)
+	// 1. Initialize Native MinIO first
+	baseLayer, err := newErasureServerPools(ctx, endpointServerPools)
+	if err != nil {
+		return nil, err
 	}
-	return newErasureServerPools(ctx, endpointServerPools)
+
+	// 2. Wrap it with our Telegram Backend!
+	if os.Getenv("MINIO_TELEGRAM_ENABLED") == "on" {
+		fmt.Println("🚀🚀🚀 WRAPPING NATIVE MINIO WITH TELEGRAM BACKEND... 🚀🚀🚀")
+		return NewTelegramObjectLayer(ctx, baseLayer)
+	}
+
+	return baseLayer, nil
 }
