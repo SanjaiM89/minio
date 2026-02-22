@@ -10,11 +10,9 @@ import (
 
 // MakeBucket creates a new bucket in the Telegram backend
 func (t *TelegramObjectLayer) MakeBucket(ctx context.Context, bucket string, opts MakeBucketOptions) error {
-	_, err := t.db.ExecContext(ctx, "INSERT INTO buckets (name) VALUES ($1)", bucket)
+	_, err := t.db.ExecContext(ctx, "INSERT INTO buckets (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", bucket)
 	if err != nil {
-		// Basic duplicate check (assuming unique constraint on name)
-		// Ideally we check sql error code for uniqueness violation
-		return BucketAlreadyExists{Bucket: bucket}
+		return err
 	}
 	return nil
 }

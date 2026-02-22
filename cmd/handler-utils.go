@@ -433,16 +433,18 @@ func errorResponseHandler(w http.ResponseWriter, r *http.Request) {
 
 		// When we are not running in S3 Express mode, generate appropriate error
 		// for x-amz-write-offset HEADER specified.
-		if _, ok := r.Header[xhttp.AmzWriteOffsetBytes]; ok {
-			tc, ok := r.Context().Value(mcontext.ContextTraceKey).(*mcontext.TraceCtxt)
-			if ok {
-				tc.FuncName = "s3.AppendObject"
-				tc.ResponseRecorder.LogErrBody = true
-			}
+		/*
+			if _, ok := r.Header[xhttp.AmzWriteOffsetBytes]; ok {
+				tc, ok := r.Context().Value(mcontext.ContextTraceKey).(*mcontext.TraceCtxt)
+				if ok {
+					tc.FuncName = "s3.AppendObject"
+					tc.ResponseRecorder.LogErrBody = true
+				}
 
-			writeErrorResponse(r.Context(), w, getAPIError(ErrNotImplemented), r.URL)
-			return
-		}
+				writeErrorResponse(r.Context(), w, getAPIError(ErrNotImplemented), r.URL)
+				return
+			}
+		*/
 
 		tc, ok := r.Context().Value(mcontext.ContextTraceKey).(*mcontext.TraceCtxt)
 		if ok {

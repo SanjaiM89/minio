@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/dcs"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	_ "github.com/lib/pq" // PostgreSQL driver
 	"github.com/minio/madmin-go/v3"
 	"github.com/minio/minio-go/v7/pkg/tags"
@@ -23,11 +27,36 @@ type TelegramObjectLayer struct {
 	db                *sql.DB
 	config            *TelegramConfig
 	channelAccessHash int64 // resolved once at startup
+	hashMu            sync.RWMutex
+	readyCh           chan struct{} // closed when Telegram auth completes
+	LocalDiskPath     string        // Path to store .minio.sys system files locally
+}
+
+// Helper function to check if the bucket is a MinIO system bucket
+func (t *TelegramObjectLayer) isSystemBucket(bucket string) bool {
+	return bucket == minioMetaBucket || bucket == minioMetaMultipartBucket || bucket == ".minio.sys"
+}
+
+// Helper function to get the local disk path for a system file
+func (t *TelegramObjectLayer) getLocalPath(bucket, object string) string {
+	return filepath.Join(t.LocalDiskPath, bucket, object)
+}
+
+// tgReady blocks until the Telegram client is authenticated or ctx is canceled.
+func (t *TelegramObjectLayer) tgReady(ctx context.Context) error {
+	select {
+	case <-t.readyCh:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("telegram client not ready: %w", ctx.Err())
+	}
 }
 
 // NewTelegramObjectLayer initializes the Telegram object layer
 func NewTelegramObjectLayer(ctx context.Context) (ObjectLayer, error) {
+	localPath := "/tmp/minio-telegram-sys"
 	cfg := LoadTelegramConfig()
+
 	if !cfg.TelegramEnabled {
 		return nil, fmt.Errorf("telegram backend is not enabled")
 	}
@@ -41,6 +70,14 @@ func NewTelegramObjectLayer(ctx context.Context) (ObjectLayer, error) {
 		return nil, fmt.Errorf("failed to ping postgres: %w", err)
 	}
 
+	// Create the base local system bucket directories immediately
+	if err := os.MkdirAll(filepath.Join(localPath, minioMetaBucket), 0755); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(localPath, minioMetaMultipartBucket), 0755); err != nil {
+		return nil, err
+	}
+
 	// Initialize Schema
 	schema := `
 	CREATE TABLE IF NOT EXISTS buckets (
@@ -51,12 +88,16 @@ func NewTelegramObjectLayer(ctx context.Context) (ObjectLayer, error) {
 		bucket TEXT NOT NULL,
 		key TEXT NOT NULL,
 		metadata JSONB,
+		data BYTEA,
 		PRIMARY KEY (bucket, key)
 	);
 	`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
+
+	// Ensure 'data' column exists if the table was already created
+	_, _ = db.ExecContext(ctx, "ALTER TABLE objects ADD COLUMN IF NOT EXISTS data BYTEA")
 
 	opts := telegram.Options{}
 
@@ -91,77 +132,82 @@ func NewTelegramObjectLayer(ctx context.Context) (ObjectLayer, error) {
 	// Initialize Telegram client
 	client := telegram.NewClient(cfg.AppID, cfg.AppHash, opts)
 
-	// Start client in background (simplified for this layer)
-	// MinIO needs synchronous client availability, but Telegram login is async.
-	// We'll start a goroutine to keep the client running, and wait for auth.
-
-	// Note: Ideally, we should manage this lifecycle better.
-	// For this PoC, we will try to auth immediately.
-
 	// Creating a detached context for the background client loop
 	bgCtx := context.Background()
 
-	// ready carries: (accessHash int64, error)
-	type readyMsg struct {
-		accessHash int64
-		err        error
+	// Initialize the layer immediately so MinIO HTTP server can start
+	layer := &TelegramObjectLayer{
+		db:            db,
+		config:        cfg,
+		tgClient:      client,
+		readyCh:       make(chan struct{}),
+		LocalDiskPath: localPath,
 	}
-	ready := make(chan readyMsg, 1)
 
 	go func() {
 		err := client.Run(bgCtx, func(ctx context.Context) error {
-			// Authenticate as Bot
-			if _, err := client.Auth().Bot(ctx, cfg.BotToken); err != nil {
-				return fmt.Errorf("auth failed: %w", err)
+			// Authenticate as Bot with FloodWait handling
+			for retries := 0; retries < 10; retries++ {
+				_, authErr := client.Auth().Bot(ctx, cfg.BotToken)
+				if authErr == nil {
+					fmt.Println("Telegram bot authenticated successfully")
+					break
+				}
+				if d, ok := tgerr.AsFloodWait(authErr); ok {
+					fmt.Printf("Bot auth rate limited (Flood Wait), sleeping %v...\n", d)
+					time.Sleep(d + time.Second)
+					continue
+				}
+				fmt.Printf("Telegram auth failed: %v\n", authErr)
+				return fmt.Errorf("auth failed: %w", authErr)
 			}
 
-			// Resolve channel access hash once
+			// Resolve channel access hash with FloodWait handling
 			api := client.API()
-			chResult, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
-				&tg.InputChannel{ChannelID: cfg.BareChannelID, AccessHash: 0},
-			})
 			var accessHash int64
-			if err == nil {
-				if chats, ok := chResult.(*tg.MessagesChats); ok && len(chats.Chats) > 0 {
-					if ch, ok := chats.Chats[0].(*tg.Channel); ok {
-						accessHash = ch.AccessHash
+			for retries := 0; retries < 10; retries++ {
+				chResult, chErr := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+					&tg.InputChannel{ChannelID: cfg.BareChannelID, AccessHash: 0},
+				})
+				if chErr == nil {
+					if chats, ok := chResult.(*tg.MessagesChats); ok && len(chats.Chats) > 0 {
+						if ch, ok := chats.Chats[0].(*tg.Channel); ok {
+							accessHash = ch.AccessHash
+						}
 					}
+					break
 				}
+				if d, ok := tgerr.AsFloodWait(chErr); ok {
+					fmt.Printf("Channel resolve rate limited (Flood Wait), sleeping %v...\n", d)
+					time.Sleep(d + time.Second)
+					continue
+				}
+				fmt.Printf("Warning: failed to resolve channel: %v\n", chErr)
+				break
 			}
-			// Even if we can't resolve the hash, we still signal ready.
-			// Uploads will fail gracefully later if hash is 0.
-			ready <- readyMsg{accessHash: accessHash}
+
+			// Set the access hash and signal readiness
+			layer.hashMu.Lock()
+			layer.channelAccessHash = accessHash
+			layer.hashMu.Unlock()
+			close(layer.readyCh)
+			fmt.Printf("Telegram client ready (channelAccessHash=%d)\n", accessHash)
 
 			// Block until context canceled
 			<-ctx.Done()
 			return ctx.Err()
 		})
 		if err != nil {
-			ready <- readyMsg{err: err}
 			fmt.Printf("Telegram client error: %v\n", err)
+			// Signal ready even on error so operations don't hang forever
+			select {
+			case <-layer.readyCh:
+				// already closed
+			default:
+				close(layer.readyCh)
+			}
 		}
 	}()
-
-	// Wait for readiness (timeout after 30s)
-	var channelAccessHash int64
-	select {
-	case msg := <-ready:
-		if msg.err != nil {
-			return nil, msg.err
-		}
-		channelAccessHash = msg.accessHash
-	case <-time.After(30 * time.Second):
-		fmt.Println("Warning: Telegram client not ready in 30s")
-	}
-
-	// Initialize the global leader lock so subsystems like the data-scanner
-	// don't panic with a nil pointer dereference when calling GetLock.
-	layer := &TelegramObjectLayer{
-		db:                db,
-		config:            cfg,
-		tgClient:          client,
-		channelAccessHash: channelAccessHash,
-	}
 	if globalLeaderLock == nil {
 		globalLeaderLock = newSharedLock(GlobalContext, layer, "leader.lock")
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,12 +9,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"github.com/minio/madmin-go/v3"
 )
 
@@ -36,76 +39,113 @@ type ObjectMetadata struct {
 
 // PutObject uploads an object to Telegram and stores metadata in PostgreSQL
 func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object string, data *PutObjReader, opts ObjectOptions) (objInfo ObjectInfo, err error) {
+	// Wait for Telegram client to be ready
+	if err := t.tgReady(ctx); err != nil {
+		return ObjectInfo{}, err
+	}
+
 	reader := data.Reader
 	size := data.Size()
 
-	// Initialize uploader with 16 threads for maximum speed
-	u := uploader.NewUploader(t.tgClient.API()).WithThreads(16)
-	sender := message.NewSender(t.tgClient.API()).WithUploader(u)
-	// Use InputPeerChannel directly to avoid gotd's peer resolver
-	// mis-parsing "channel#ID" (the # is treated as a URL fragment).
-	target := sender.To(&tg.InputPeerChannel{
-		ChannelID:  t.config.BareChannelID,
-		AccessHash: t.channelAccessHash,
-	})
-
 	var msgIDs []int
-	remaining := size
-	partNum := 0
+	var internalData []byte
 
-	for remaining > 0 {
-		chunkSize := remaining
-		if chunkSize > MaxTelegramChunkSize {
-			chunkSize = MaxTelegramChunkSize
-		}
-
-		partNum++
-		partName := fmt.Sprintf("%s.part%d", object, partNum)
-
-		// Use LimitReader to read only the chunk size
-		limitedReader := io.LimitReader(reader, chunkSize)
-
-		// Upload chunk
-		upload, err := u.Upload(ctx, uploader.NewUpload(partName, limitedReader, chunkSize))
+	// Filter internal MinIO metadata and small files to avoid Telegram rate limits and "Unknown Track" spam.
+	// We store files < 500KB, internal buckets, or dot-files (metadata) directly in PostgreSQL.
+	isInternal := isMinioMetaBucketName(bucket) || isMinioReservedBucket(bucket) || strings.HasPrefix(object, ".")
+	if isInternal || (size > 0 && size < 500000) {
+		// Store internal/small data only in PostgreSQL
+		internalData, err = io.ReadAll(reader)
 		if err != nil {
-			return ObjectInfo{}, fmt.Errorf("telegram upload failed for part %d: %w", partNum, err)
+			return ObjectInfo{}, fmt.Errorf("failed to read internal/small data: %w", err)
 		}
+		size = int64(len(internalData))
+	} else {
+		// Initialize uploader with 16 threads for maximum speed
+		u := uploader.NewUploader(t.tgClient.API()).WithThreads(16)
+		sender := message.NewSender(t.tgClient.API()).WithUploader(u)
+		// Use InputPeerChannel directly to avoid gotd's peer resolver
+		// mis-parsing "channel#ID" (the # is treated as a URL fragment).
+		target := sender.To(&tg.InputPeerChannel{
+			ChannelID:  t.config.BareChannelID,
+			AccessHash: t.channelAccessHash,
+		})
 
-		// Send message with chunk
-		msgUpdates, err := target.File(ctx, upload)
-		if err != nil {
-			return ObjectInfo{}, fmt.Errorf("telegram send failed for part %d: %w", partNum, err)
-		}
+		remaining := size
+		partNum := 0
 
-		// Robust Message ID Extraction for channels
-		msgID := 0
-		switch upds := msgUpdates.(type) {
-		case *tg.Updates:
-			for _, upd := range upds.Updates {
-				switch u := upd.(type) {
-				case *tg.UpdateNewMessage:
-					if m, ok := u.Message.(*tg.Message); ok {
-						msgID = m.ID
-					}
-				case *tg.UpdateNewChannelMessage:
-					if m, ok := u.Message.(*tg.Message); ok {
-						msgID = m.ID
-					}
-				}
-				if msgID != 0 {
+		for remaining > 0 {
+			chunkSize := remaining
+			if chunkSize > MaxTelegramChunkSize {
+				chunkSize = MaxTelegramChunkSize
+			}
+
+			partNum++
+			partName := fmt.Sprintf("%s.part%d", object, partNum)
+
+			// Use LimitReader to read only the chunk size
+			limitedReader := io.LimitReader(reader, chunkSize)
+
+			// Upload chunk
+			upload, err := u.Upload(ctx, uploader.NewUpload(partName, limitedReader, chunkSize))
+			if err != nil {
+				return ObjectInfo{}, fmt.Errorf("telegram upload failed for part %d: %w", partNum, err)
+			}
+
+			// Send message with chunk, respecting FloodWait rate limits
+			var msgUpdates tg.UpdatesClass
+			for retries := 0; retries < 15; retries++ {
+				msgUpdates, err = target.File(ctx, upload)
+				if err == nil {
 					break
 				}
+				if d, ok := tgerr.AsFloodWait(err); ok {
+					fmt.Printf("Rate limited by Telegram (Flood Wait), sleeping for %v...\n", d)
+					time.Sleep(d + time.Second) // Add 1s buffer
+					continue
+				}
+				// For non-flood errors, wait a short bit on the first few retries in case it's a momentary network issue
+				if retries < 3 {
+					time.Sleep(2 * time.Second)
+					continue
+				}
+				break
 			}
-		case *tg.UpdateShortSentMessage:
-			msgID = upds.ID
-		}
 
-		if msgID == 0 {
-			return ObjectInfo{}, fmt.Errorf("failed to extract message ID for part %d", partNum)
-		}
+			if err != nil {
+				return ObjectInfo{}, fmt.Errorf("telegram send failed for part %d after retries: %w", partNum, err)
+			}
 
-		msgIDs = append(msgIDs, msgID)
-		remaining -= chunkSize
+			// Robust Message ID Extraction for channels
+			msgID := 0
+			switch upds := msgUpdates.(type) {
+			case *tg.Updates:
+				for _, upd := range upds.Updates {
+					switch u := upd.(type) {
+					case *tg.UpdateNewMessage:
+						if m, ok := u.Message.(*tg.Message); ok {
+							msgID = m.ID
+						}
+					case *tg.UpdateNewChannelMessage:
+						if m, ok := u.Message.(*tg.Message); ok {
+							msgID = m.ID
+						}
+					}
+					if msgID != 0 {
+						break
+					}
+				}
+			case *tg.UpdateShortSentMessage:
+				msgID = upds.ID
+			}
+
+			if msgID == 0 {
+				return ObjectInfo{}, fmt.Errorf("failed to extract message ID for part %d", partNum)
+			}
+
+			msgIDs = append(msgIDs, msgID)
+			remaining -= chunkSize
+		}
 	}
 
 	// 2. Store Metadata in PostgreSQL
@@ -126,12 +166,12 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 
 	// Upsert implementation for Postgres
 	query := `
-		INSERT INTO objects (bucket, key, metadata) 
-		VALUES ($1, $2, $3)
+		INSERT INTO objects (bucket, key, metadata, data) 
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (bucket, key) 
-		DO UPDATE SET metadata = EXCLUDED.metadata
+		DO UPDATE SET metadata = EXCLUDED.metadata, data = EXCLUDED.data
 	`
-	if _, err := t.db.ExecContext(ctx, query, bucket, object, metaBytes); err != nil {
+	if _, err := t.db.ExecContext(ctx, query, bucket, object, metaBytes, internalData); err != nil {
 		return ObjectInfo{}, fmt.Errorf("postgres upsert failed: %w", err)
 	}
 
@@ -147,8 +187,14 @@ func (t *TelegramObjectLayer) PutObject(ctx context.Context, bucket, object stri
 
 // GetObjectNInfo returns a reader for the object
 func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object string, rs *HTTPRangeSpec, h http.Header, opts ObjectOptions) (gr *GetObjectReader, err error) {
+	// Wait for Telegram client to be ready
+	if err := t.tgReady(ctx); err != nil {
+		return nil, err
+	}
+
 	var metaBytes []byte
-	err = t.db.QueryRowContext(ctx, "SELECT metadata FROM objects WHERE bucket=$1 AND key=$2", bucket, object).Scan(&metaBytes)
+	var internalData []byte
+	err = t.db.QueryRowContext(ctx, "SELECT metadata, data FROM objects WHERE bucket=$1 AND key=$2", bucket, object).Scan(&metaBytes, &internalData)
 	if err == sql.ErrNoRows {
 		return nil, ObjectNotFound{Bucket: bucket, Object: object}
 	} else if err != nil {
@@ -169,6 +215,11 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 		ContentType: meta.ContentType,
 	}
 
+	// If data is stored in PostgreSQL (internal metadata), serve it directly
+	if len(internalData) > 0 {
+		return NewGetObjectReaderFromReader(bytes.NewReader(internalData), objInfo, opts)
+	}
+
 	pr, pw := io.Pipe()
 
 	go func() {
@@ -185,18 +236,31 @@ func (t *TelegramObjectLayer) GetObjectNInfo(ctx context.Context, bucket, object
 		d := downloader.NewDownloader()
 
 		for _, msgID := range meta.Parts {
-			// Get message to find the document
-			resp, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-				Channel: &tg.InputChannel{
-					ChannelID:  t.config.BareChannelID,
-					AccessHash: t.channelAccessHash,
-				},
-				ID: []tg.InputMessageClass{
-					&tg.InputMessageID{ID: msgID},
-				},
-			})
-			if err != nil {
-				pw.CloseWithError(fmt.Errorf("failed to get message %d: %w", msgID, err))
+			// Get message to find the document, with FloodWait handling
+			var resp tg.MessagesMessagesClass
+			var getErr error
+			for retries := 0; retries < 10; retries++ {
+				resp, getErr = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+					Channel: &tg.InputChannel{
+						ChannelID:  t.config.BareChannelID,
+						AccessHash: t.channelAccessHash,
+					},
+					ID: []tg.InputMessageClass{
+						&tg.InputMessageID{ID: msgID},
+					},
+				})
+				if getErr == nil {
+					break
+				}
+				if d, ok := tgerr.AsFloodWait(getErr); ok {
+					fmt.Printf("Download rate limited (Flood Wait), sleeping %v...\n", d)
+					time.Sleep(d + time.Second)
+					continue
+				}
+				break
+			}
+			if getErr != nil {
+				pw.CloseWithError(fmt.Errorf("failed to get message %d: %w", msgID, getErr))
 				return
 			}
 
@@ -281,9 +345,11 @@ func (t *TelegramObjectLayer) DeleteObject(ctx context.Context, bucket, object s
 	t.db.ExecContext(ctx, "DELETE FROM objects WHERE bucket=$1 AND key=$2", bucket, object)
 
 	// Delete from Telegram (Async/Best effort)
-	go func() {
-		// t.tgClient.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{ID: meta.Parts})
-	}()
+	if len(meta.Parts) > 0 {
+		go func() {
+			// t.tgClient.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{ID: meta.Parts})
+		}()
+	}
 
 	return ObjectInfo{
 		Bucket: bucket,
