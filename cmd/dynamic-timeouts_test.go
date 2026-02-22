@@ -163,7 +163,7 @@ func TestDynamicTimeoutHitMinimum(t *testing.T) {
 	}
 }
 
-func testDynamicTimeoutAdjust(t *testing.T, timeout *dynamicTimeout, f func() float64) {
+func testDynamicTimeoutAdjust(_ *testing.T, timeout *dynamicTimeout, f func() float64) {
 	const successTimeout = 20 * time.Second
 
 	for range dynamicTimeoutLogSize {

@@ -86,7 +86,7 @@ func loadProcStatMetrics(ctx context.Context, stat procfs.ProcStat, m MetricValu
 	}
 }
 
-func loadProcIOMetrics(ctx context.Context, io procfs.ProcIO, m MetricValues) {
+func loadProcIOMetrics(_ context.Context, io procfs.ProcIO, m MetricValues) {
 	if io.RChar > 0 {
 		m.Set(processIORCharBytes, float64(io.RChar))
 	}

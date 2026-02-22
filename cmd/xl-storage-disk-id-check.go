@@ -279,7 +279,7 @@ func (p *xlStorageDiskIDCheck) checkDiskStale() error {
 		// return any error generated while reading `format.json`
 		return err
 	}
-	if err == nil && *p.diskID.Load() == storedDiskID {
+	if *p.diskID.Load() == storedDiskID {
 		return nil
 	}
 	// not the same disk we remember, take it offline.
@@ -379,7 +379,7 @@ func (p *xlStorageDiskIDCheck) StatVol(ctx context.Context, volume string) (vol 
 	}
 	defer done(0, &err)
 
-	return xioutil.WithDeadline[VolInfo](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result VolInfo, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result VolInfo, err error) {
 		return p.storage.StatVol(ctx, volume)
 	})
 }
@@ -415,7 +415,7 @@ func (p *xlStorageDiskIDCheck) ReadFile(ctx context.Context, volume string, path
 		done(n, &err)
 	}()
 
-	return xioutil.WithDeadline[int64](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result int64, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result int64, err error) {
 		return p.storage.ReadFile(ctx, volume, path, offset, buf, verifier)
 	})
 }
@@ -451,7 +451,7 @@ func (p *xlStorageDiskIDCheck) ReadFileStream(ctx context.Context, volume, path 
 	}
 	defer done(length, &err)
 
-	return xioutil.WithDeadline[io.ReadCloser](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result io.ReadCloser, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result io.ReadCloser, err error) {
 		return p.storage.ReadFileStream(ctx, volume, path, offset, length)
 	})
 }
@@ -496,7 +496,7 @@ func (p *xlStorageDiskIDCheck) RenameData(ctx context.Context, srcVolume, srcPat
 	if len(fi.Data) > 0 {
 		fi.Data = append(grid.GetByteBufferCap(len(fi.Data))[:0], fi.Data...)
 	}
-	return xioutil.WithDeadline[RenameDataResp](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (res RenameDataResp, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (res RenameDataResp, err error) {
 		if len(fi.Data) > 0 {
 			defer grid.PutByteBuffer(fi.Data)
 		}
@@ -668,7 +668,7 @@ func (p *xlStorageDiskIDCheck) ReadVersion(ctx context.Context, origvolume, volu
 	}
 	defer done(0, &err)
 
-	return xioutil.WithDeadline[FileInfo](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result FileInfo, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result FileInfo, err error) {
 		return p.storage.ReadVersion(ctx, origvolume, volume, path, versionID, opts)
 	})
 }
@@ -684,7 +684,7 @@ func (p *xlStorageDiskIDCheck) ReadAll(ctx context.Context, volume string, path 
 		done(int64(sz), &err)
 	}()
 
-	return xioutil.WithDeadline[[]byte](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result []byte, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result []byte, err error) {
 		return p.storage.ReadAll(ctx, volume, path)
 	})
 }
@@ -698,7 +698,7 @@ func (p *xlStorageDiskIDCheck) ReadXL(ctx context.Context, volume string, path s
 		done(int64(len(rf.Buf)), &err)
 	}()
 
-	return xioutil.WithDeadline[RawFileInfo](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result RawFileInfo, err error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (result RawFileInfo, err error) {
 		return p.storage.ReadXL(ctx, volume, path, readData)
 	})
 }
@@ -929,7 +929,7 @@ var toWrite = []byte{2048: 42}
 
 // monitorDiskStatus should be called once when a drive has been marked offline.
 // Once the disk has been deemed ok, it will return to online status.
-func (p *xlStorageDiskIDCheck) monitorDiskStatus(spent time.Duration, fn string) {
+func (p *xlStorageDiskIDCheck) monitorDiskStatus(_ time.Duration, fn string) {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 

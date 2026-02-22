@@ -129,7 +129,7 @@ func TestHTTPRequestRangeToHeader(t *testing.T) {
 	for i, testCase := range validRangeSpecs {
 		rs, err := parseRequestRangeSpec(testCase.spec)
 		if err != nil {
-			if !testCase.errExpected || err == nil && testCase.errExpected {
+			if !testCase.errExpected || testCase.errExpected {
 				t.Errorf("unexpected err: %v", err)
 			}
 			continue

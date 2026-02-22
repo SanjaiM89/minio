@@ -1811,7 +1811,7 @@ func (c *SiteReplicationSys) PeerBucketLCConfigHandler(ctx context.Context, buck
 
 // getAdminClient - NOTE: ensure to take at least a read lock on SiteReplicationSys
 // before calling this.
-func (c *SiteReplicationSys) getAdminClient(ctx context.Context, deploymentID string) (*madmin.AdminClient, error) {
+func (c *SiteReplicationSys) getAdminClient(_ context.Context, deploymentID string) (*madmin.AdminClient, error) {
 	creds, err := c.getPeerCreds()
 	if err != nil {
 		return nil, err
@@ -1827,7 +1827,7 @@ func (c *SiteReplicationSys) getAdminClient(ctx context.Context, deploymentID st
 
 // getAdminClientWithEndpoint - NOTE: ensure to take at least a read lock on SiteReplicationSys
 // before calling this.
-func (c *SiteReplicationSys) getAdminClientWithEndpoint(ctx context.Context, deploymentID, endpoint string) (*madmin.AdminClient, error) {
+func (c *SiteReplicationSys) getAdminClientWithEndpoint(_ context.Context, deploymentID, endpoint string) (*madmin.AdminClient, error) {
 	creds, err := c.getPeerCreds()
 	if err != nil {
 		return nil, err
@@ -4375,7 +4375,7 @@ func getSRBucketDeleteOp(isSiteReplicated bool) SRBucketDeleteOp {
 	return MarkDelete
 }
 
-func (c *SiteReplicationSys) healILMExpiryConfig(ctx context.Context, objAPI ObjectLayer, info srStatusInfo) error {
+func (c *SiteReplicationSys) healILMExpiryConfig(ctx context.Context, _ ObjectLayer, info srStatusInfo) error {
 	c.RLock()
 	defer c.RUnlock()
 	if !c.enabled {
@@ -4476,7 +4476,7 @@ func (c *SiteReplicationSys) healBuckets(ctx context.Context, objAPI ObjectLayer
 	return nil
 }
 
-func (c *SiteReplicationSys) healBucketILMExpiry(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healBucketILMExpiry(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	bs := info.BucketStats[bucket]
 
 	c.RLock()
@@ -4553,7 +4553,7 @@ func (c *SiteReplicationSys) healBucketILMExpiry(ctx context.Context, objAPI Obj
 	return nil
 }
 
-func (c *SiteReplicationSys) healTagMetadata(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healTagMetadata(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	bs := info.BucketStats[bucket]
 
 	c.RLock()
@@ -4625,7 +4625,7 @@ func (c *SiteReplicationSys) healTagMetadata(ctx context.Context, objAPI ObjectL
 	return nil
 }
 
-func (c *SiteReplicationSys) healBucketPolicies(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healBucketPolicies(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	bs := info.BucketStats[bucket]
 
 	c.RLock()
@@ -4690,7 +4690,7 @@ func (c *SiteReplicationSys) healBucketPolicies(ctx context.Context, objAPI Obje
 	return nil
 }
 
-func (c *SiteReplicationSys) healBucketQuotaConfig(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healBucketQuotaConfig(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	bs := info.BucketStats[bucket]
 
 	c.RLock()
@@ -4766,7 +4766,7 @@ func (c *SiteReplicationSys) healBucketQuotaConfig(ctx context.Context, objAPI O
 	return nil
 }
 
-func (c *SiteReplicationSys) healVersioningMetadata(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healVersioningMetadata(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	c.RLock()
 	defer c.RUnlock()
 	if !c.enabled {
@@ -4841,7 +4841,7 @@ func (c *SiteReplicationSys) healVersioningMetadata(ctx context.Context, objAPI 
 	return nil
 }
 
-func (c *SiteReplicationSys) healSSEMetadata(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healSSEMetadata(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	c.RLock()
 	defer c.RUnlock()
 	if !c.enabled {
@@ -4916,7 +4916,7 @@ func (c *SiteReplicationSys) healSSEMetadata(ctx context.Context, objAPI ObjectL
 	return nil
 }
 
-func (c *SiteReplicationSys) healOLockConfigMetadata(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healOLockConfigMetadata(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo) error {
 	bs := info.BucketStats[bucket]
 
 	c.RLock()
@@ -4991,7 +4991,7 @@ func (c *SiteReplicationSys) healOLockConfigMetadata(ctx context.Context, objAPI
 	return nil
 }
 
-func (c *SiteReplicationSys) purgeDeletedBucket(ctx context.Context, objAPI ObjectLayer, bucket string) {
+func (c *SiteReplicationSys) purgeDeletedBucket(_ context.Context, objAPI ObjectLayer, bucket string) {
 	z, ok := objAPI.(*erasureServerPools)
 	if !ok {
 		return
@@ -5159,7 +5159,7 @@ func (c *SiteReplicationSys) healBucket(ctx context.Context, objAPI ObjectLayer,
 	return nil
 }
 
-func (c *SiteReplicationSys) healBucketReplicationConfig(ctx context.Context, objAPI ObjectLayer, bucket string, info srStatusInfo, opts *validateReplicationDestinationOptions) error {
+func (c *SiteReplicationSys) healBucketReplicationConfig(ctx context.Context, _ ObjectLayer, bucket string, info srStatusInfo, opts *validateReplicationDestinationOptions) error {
 	bs := info.BucketStats[bucket]
 
 	c.RLock()
@@ -5265,7 +5265,7 @@ func (c *SiteReplicationSys) healIAMSystem(ctx context.Context, objAPI ObjectLay
 }
 
 // heal iam policies present on this site to peers, provided current cluster has the most recent update.
-func (c *SiteReplicationSys) healPolicies(ctx context.Context, objAPI ObjectLayer, policy string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healPolicies(ctx context.Context, _ ObjectLayer, policy string, info srStatusInfo) error {
 	// create IAM policy on peer cluster if missing
 	ps := info.PolicyStats[policy]
 
@@ -5323,7 +5323,7 @@ func (c *SiteReplicationSys) healPolicies(ctx context.Context, objAPI ObjectLaye
 }
 
 // heal user policy mappings present on this site to peers, provided current cluster has the most recent update.
-func (c *SiteReplicationSys) healUserPolicies(ctx context.Context, objAPI ObjectLayer, user string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healUserPolicies(ctx context.Context, _ ObjectLayer, user string, info srStatusInfo) error {
 	// create user policy mapping on peer cluster if missing
 	us := info.UserStats[user]
 
@@ -5385,7 +5385,7 @@ func (c *SiteReplicationSys) healUserPolicies(ctx context.Context, objAPI Object
 }
 
 // heal group policy mappings present on this site to peers, provided current cluster has the most recent update.
-func (c *SiteReplicationSys) healGroupPolicies(ctx context.Context, objAPI ObjectLayer, group string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healGroupPolicies(ctx context.Context, _ ObjectLayer, group string, info srStatusInfo) error {
 	// create group policy mapping on peer cluster if missing
 	gs := info.GroupStats[group]
 
@@ -5451,7 +5451,7 @@ func (c *SiteReplicationSys) healGroupPolicies(ctx context.Context, objAPI Objec
 
 // heal all users and their service accounts that are present on this site,
 // provided current cluster has the most recent update.
-func (c *SiteReplicationSys) healUsers(ctx context.Context, objAPI ObjectLayer, user string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healUsers(ctx context.Context, _ ObjectLayer, user string, info srStatusInfo) error {
 	// create user if missing; fix user policy mapping if missing
 	us := info.UserStats[user]
 
@@ -5608,7 +5608,7 @@ func (c *SiteReplicationSys) healUsers(ctx context.Context, objAPI ObjectLayer, 
 	return nil
 }
 
-func (c *SiteReplicationSys) healGroups(ctx context.Context, objAPI ObjectLayer, group string, info srStatusInfo) error {
+func (c *SiteReplicationSys) healGroups(ctx context.Context, _ ObjectLayer, group string, info srStatusInfo) error {
 	c.RLock()
 	defer c.RUnlock()
 	if !c.enabled {
@@ -5991,7 +5991,7 @@ func newSiteResyncStatus(dID string, buckets []BucketInfo) SiteResyncStatus {
 }
 
 // load site resync metadata from disk
-func loadSiteResyncMetadata(ctx context.Context, objAPI ObjectLayer, dID string) (rs SiteResyncStatus, e error) {
+func loadSiteResyncMetadata(_ context.Context, objAPI ObjectLayer, dID string) (rs SiteResyncStatus, e error) {
 	data, err := readConfig(GlobalContext, objAPI, getSRResyncFilePath(dID))
 	if err != nil {
 		return rs, err

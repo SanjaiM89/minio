@@ -560,7 +560,7 @@ const (
 	defaultMinisignPubkey = "RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav"
 )
 
-func verifyBinary(u *url.URL, sha256Sum []byte, releaseInfo, mode string, reader io.Reader) (err error) {
+func verifyBinary(u *url.URL, sha256Sum []byte, releaseInfo, _ string, reader io.Reader) (err error) {
 	if !updateInProgress.CompareAndSwap(0, 1) {
 		return errors.New("update already in progress")
 	}

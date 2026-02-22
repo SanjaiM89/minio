@@ -775,7 +775,7 @@ func (m caseInsensitiveMap) Lookup(key string) (string, bool) {
 	return "", false
 }
 
-func putReplicationOpts(ctx context.Context, sc string, objInfo ObjectInfo) (putOpts minio.PutObjectOptions, isMP bool, err error) {
+func putReplicationOpts(_ context.Context, sc string, objInfo ObjectInfo) (putOpts minio.PutObjectOptions, isMP bool, err error) {
 	meta := make(map[string]string)
 	isSSEC := crypto.SSEC.IsEncrypted(objInfo.UserDefined)
 
@@ -2179,7 +2179,7 @@ const (
 // getWorkerCh gets a worker channel deterministically based on bucket and object names.
 // Must be able to grab read lock from p.
 
-func (p *ReplicationPool) getWorkerCh(bucket, object string, sz int64) chan<- ReplicationWorkerOperation {
+func (p *ReplicationPool) getWorkerCh(bucket, object string, _ int64) chan<- ReplicationWorkerOperation {
 	h := xxh3.HashString(bucket + object)
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -2654,7 +2654,7 @@ func proxyGetTaggingToRepTarget(ctx context.Context, bucket, object string, opts
 	return tgs, proxy
 }
 
-func scheduleReplicationDelete(ctx context.Context, dv DeletedObjectReplicationInfo, o ObjectLayer) {
+func scheduleReplicationDelete(_ context.Context, dv DeletedObjectReplicationInfo, _ ObjectLayer) {
 	globalReplicationPool.Get().queueReplicaDeleteTask(dv)
 	for arn := range dv.ReplicationState.Targets {
 		globalReplicationStats.Load().Update(dv.Bucket, replicatedTargetInfo{Arn: arn, Size: 0, Duration: 0, OpType: replication.DeleteReplicationType}, replication.Pending, replication.StatusType(""))
@@ -3159,7 +3159,7 @@ func replicationResyncTrace(resyncID string, startTime time.Time, duration time.
 }
 
 // delete resync metadata from replication resync state in memory
-func (p *ReplicationPool) deleteResyncMetadata(ctx context.Context, bucket string) {
+func (p *ReplicationPool) deleteResyncMetadata(_ context.Context, bucket string) {
 	if p == nil {
 		return
 	}
@@ -3233,7 +3233,7 @@ func (p *ReplicationPool) loadResync(ctx context.Context, buckets []string, objA
 }
 
 // load bucket resync metadata from disk
-func loadBucketResyncMetadata(ctx context.Context, bucket string, objAPI ObjectLayer) (brs BucketReplicationResyncStatus, e error) {
+func loadBucketResyncMetadata(_ context.Context, bucket string, objAPI ObjectLayer) (brs BucketReplicationResyncStatus, e error) {
 	brs = newBucketResyncStatus(bucket)
 	resyncDirPath := path.Join(bucketMetaPrefix, bucket, replicationDir)
 	data, err := readConfig(GlobalContext, objAPI, pathJoin(resyncDirPath, resyncFileName))
@@ -3407,7 +3407,7 @@ func QueueReplicationHeal(ctx context.Context, bucket string, oi ObjectInfo, ret
 
 // queueReplicationHeal enqueues objects that failed replication OR eligible for resyncing through
 // an ongoing resync operation or via existing objects replication configuration setting.
-func queueReplicationHeal(ctx context.Context, bucket string, oi ObjectInfo, rcfg replicationConfig, retryCount int) (roi ReplicateObjectInfo) {
+func queueReplicationHeal(_ context.Context, _ string, oi ObjectInfo, rcfg replicationConfig, retryCount int) (roi ReplicateObjectInfo) {
 	// ignore modtime zero objects
 	if oi.ModTime.IsZero() {
 		return roi

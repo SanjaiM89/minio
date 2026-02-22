@@ -141,7 +141,7 @@ const (
 )
 
 const (
-	cacheSubsystem            MetricSubsystem = "cache"
+	_cacheSubsystem            MetricSubsystem = "cache"
 	capacityRawSubsystem      MetricSubsystem = "capacity_raw"
 	capacityUsableSubsystem   MetricSubsystem = "capacity_usable"
 	driveSubsystem            MetricSubsystem = "drive"
@@ -186,11 +186,11 @@ const (
 	errorsTotal       MetricName = "errors_total"
 	headerTotal       MetricName = "header_total"
 	healTotal         MetricName = "heal_total"
-	hitsTotal         MetricName = "hits_total"
+	_hitsTotal         MetricName = "hits_total"
 	inflightTotal     MetricName = "inflight_total"
 	invalidTotal      MetricName = "invalid_total"
 	limitTotal        MetricName = "limit_total"
-	missedTotal       MetricName = "missed_total"
+	_missedTotal       MetricName = "missed_total"
 	waitingTotal      MetricName = "waiting_total"
 	incomingTotal     MetricName = "incoming_total"
 	objectTotal       MetricName = "object_total"
@@ -260,10 +260,10 @@ const (
 	wcharBytes      MetricName = "wchar_bytes"
 
 	latencyMicroSec MetricName = "latency_us"
-	latencyNanoSec  MetricName = "latency_ns"
+	_latencyNanoSec  MetricName = "latency_ns"
 
 	commitInfo  MetricName = "commit_info"
-	usageInfo   MetricName = "usage_info"
+	_usageInfo   MetricName = "usage_info"
 	versionInfo MetricName = "version_info"
 
 	sizeDistribution    = "size_distribution"
@@ -275,7 +275,7 @@ const (
 	startTime        = "starttime_seconds"
 	upTime           = "uptime_seconds"
 	memory           = "resident_memory_bytes"
-	vmemory          = "virtual_memory_bytes"
+	_vmemory          = "virtual_memory_bytes"
 	cpu              = "cpu_total_seconds"
 
 	expiryMissedTasks            MetricName = "expiry_missed_tasks"
@@ -295,7 +295,7 @@ const (
 	kmsRequestsSuccess = "request_success"
 	kmsRequestsError   = "request_error"
 	kmsRequestsFail    = "request_failure"
-	kmsUptime          = "uptime"
+	_kmsUptime          = "uptime"
 
 	webhookOnline = "online"
 )
@@ -4027,7 +4027,7 @@ func getKMSMetrics(opts MetricsGroupOpts) *MetricsGroupV2 {
 	return mg
 }
 
-func collectMetric(metric MetricV2, labels []string, values []string, metricName string, out chan<- prometheus.Metric) {
+func collectMetric(metric MetricV2, labels []string, values []string, _ string, out chan<- prometheus.Metric) {
 	if metric.Description.Type == histogramMetric {
 		if metric.Histogram == nil {
 			return

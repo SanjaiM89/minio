@@ -215,7 +215,7 @@ var healSleeper = newDynamicSleeper(5, time.Second, false)
 // healRoutine listens to new disks reconnection events and
 // issues healing requests for queued objects belonging to the
 // corresponding erasure set
-func (m *mrfState) healRoutine(z *erasureServerPools) {
+func (m *mrfState) healRoutine(_ *erasureServerPools) {
 	for {
 		select {
 		case <-GlobalContext.Done():

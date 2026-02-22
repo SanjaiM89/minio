@@ -763,7 +763,7 @@ const (
 	batchReplFormat       = 1
 	batchReplVersionV1    = 1
 	batchReplVersion      = batchReplVersionV1
-	batchJobName          = "job.bin"
+	_batchJobName          = "job.bin"
 	batchJobPrefix        = "batch-jobs"
 	batchJobReportsPrefix = batchJobPrefix + "/reports"
 
@@ -1586,7 +1586,7 @@ func (j *BatchJobRequest) load(ctx context.Context, api ObjectLayer, name string
 	return err
 }
 
-func batchReplicationOpts(ctx context.Context, sc string, objInfo ObjectInfo) (putOpts minio.PutObjectOptions, isMP bool, err error) {
+func batchReplicationOpts(ctx context.Context, _ string, objInfo ObjectInfo) (putOpts minio.PutObjectOptions, isMP bool, err error) {
 	// TODO: support custom storage class for remote replication
 	putOpts, isMP, err = putReplicationOpts(ctx, "", objInfo)
 	if err != nil {

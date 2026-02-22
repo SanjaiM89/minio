@@ -1,0 +1,42 @@
+# Build Stage
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache git build-base
+
+# Copy go mod and sum files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the custom MinIO binary
+# The README suggests building in the root or cmd/ dir.
+# We'll build the main package from the root.
+RUN CGO_ENABLED=0 GOOS=linux go build -o minio_tg .
+
+# Runtime Stage
+FROM alpine:latest
+
+WORKDIR /app
+
+# Install runtime dependencies (ca-certificates for HTTPS)
+RUN apk add --no-cache ca-certificates
+
+# Copy binary from builder
+COPY --from=builder /app/minio_tg /usr/bin/minio
+
+# Ensure execution permissions
+RUN chmod +x /usr/bin/minio
+
+# Expose MinIO ports
+EXPOSE 9000 9001
+
+# Entrypoint
+ENTRYPOINT ["minio"]
+CMD ["server", "/data", "--console-address", ":9001"]

@@ -1326,7 +1326,7 @@ func (sys *IAMSys) getTempAccount(ctx context.Context, accessKey string) (UserId
 }
 
 // getAccountWithClaims - gets information about an account with claims
-func (sys *IAMSys) getAccountWithClaims(ctx context.Context, accessKey string) (UserIdentity, *jwt.MapClaims, error) {
+func (sys *IAMSys) getAccountWithClaims(_ context.Context, accessKey string) (UserIdentity, *jwt.MapClaims, error) {
 	if !sys.Initialized() {
 		return UserIdentity{}, nil, errServerNotInitialized
 	}
@@ -1702,7 +1702,7 @@ func (sys *IAMSys) NormalizeLDAPAccessKeypairs(ctx context.Context, accessKeyMap
 	return skippedAccessKeys, nil
 }
 
-func (sys *IAMSys) getStoredLDAPPolicyMappingKeys(ctx context.Context, isGroup bool) set.StringSet {
+func (sys *IAMSys) getStoredLDAPPolicyMappingKeys(_ context.Context, isGroup bool) set.StringSet {
 	entityKeysInStorage := set.NewStringSet()
 	cache := sys.store.rlock()
 	defer sys.store.runlock()

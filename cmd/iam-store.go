@@ -1112,7 +1112,7 @@ func (store *IAMStoreSys) ListGroups(ctx context.Context) (res []string, err err
 }
 
 // listGroups - lists groups - fetch groups from cache
-func (store *IAMStoreSys) listGroups(ctx context.Context) (res []string, err error) {
+func (store *IAMStoreSys) listGroups(_ context.Context) (res []string, err error) {
 	cache := store.rlock()
 	defer store.runlock()
 
@@ -1549,7 +1549,7 @@ func (store *IAMStoreSys) ListPolicyDocs(ctx context.Context, bucketName string)
 
 // fetches all policy docs from cache.
 // If bucketName is non-empty, returns policy docs matching the bucket.
-func (store *IAMStoreSys) listPolicyDocs(ctx context.Context, bucketName string) (map[string]PolicyDoc, error) {
+func (store *IAMStoreSys) listPolicyDocs(_ context.Context, bucketName string) (map[string]PolicyDoc, error) {
 	cache := store.rlock()
 	defer store.runlock()
 	ret := map[string]PolicyDoc{}

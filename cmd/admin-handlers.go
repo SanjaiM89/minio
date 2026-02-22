@@ -1879,7 +1879,7 @@ func deleteObjectPerfBucket(objectAPI ObjectLayer) {
 	})
 }
 
-func validateObjPerfOptions(ctx context.Context, storageInfo madmin.StorageInfo, concurrent int, size int, autotune bool) (bool, bool, string) {
+func validateObjPerfOptions(_ context.Context, storageInfo madmin.StorageInfo, concurrent int, size int, autotune bool) (bool, bool, string) {
 	capacityNeeded := uint64(concurrent * size)
 	capacity := GetTotalUsableCapacityFree(storageInfo.Disks, storageInfo)
 
@@ -3334,10 +3334,8 @@ func (a adminAPIHandlers) InspectDataHandler(w http.ResponseWriter, r *http.Requ
 
 		// Write a version for making *incompatible* changes.
 		// The AdminClient will reject any version it does not know.
-		if publicKey == nil {
-			w.Write([]byte{1})
-			w.Write(key[:])
-		}
+		w.Write([]byte{1})
+		w.Write(key[:])
 
 		stream, err := sio.AES_256_GCM.Stream(key[:])
 		if err != nil {

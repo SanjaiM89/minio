@@ -1196,6 +1196,10 @@ func serverMain(ctx *cli.Context) {
 }
 
 // Initialize object layer with the supplied disks, objectLayer is nil upon any error.
+// Initialize object layer with the supplied disks, objectLayer is nil upon any error.
 func newObjectLayer(ctx context.Context, endpointServerPools EndpointServerPools) (newObject ObjectLayer, err error) {
+	if os.Getenv("MINIO_TELEGRAM_ENABLED") == "on" {
+		return NewTelegramObjectLayer(ctx)
+	}
 	return newErasureServerPools(ctx, endpointServerPools)
 }

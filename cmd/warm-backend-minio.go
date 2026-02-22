@@ -40,7 +40,7 @@ var _ WarmBackend = (*warmBackendMinIO)(nil)
 const (
 	maxMultipartPutObjectSize = 1024 * 1024 * 1024 * 1024 * 5
 	maxPartsCount             = 10000
-	maxPartSize               = 1024 * 1024 * 1024 * 5
+	_maxPartSize               = 1024 * 1024 * 1024 * 5
 	minPartSize               = 1024 * 1024 * 128 // chosen by us to be optimal for HDDs
 )
 

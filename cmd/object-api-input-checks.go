@@ -42,7 +42,7 @@ func checkDelObjArgs(ctx context.Context, bucket, object string) error {
 }
 
 // Checks bucket and object name validity, returns nil if both are valid.
-func checkBucketAndObjectNames(ctx context.Context, bucket, object string) error {
+func checkBucketAndObjectNames(_ context.Context, bucket, object string) error {
 	// Verify if bucket is valid.
 	if !isMinioMetaBucketName(bucket) && s3utils.CheckValidBucketNameStrict(bucket) != nil {
 		return BucketNameInvalid{Bucket: bucket}
@@ -62,7 +62,7 @@ func checkBucketAndObjectNames(ctx context.Context, bucket, object string) error
 }
 
 // Checks for all ListObjects arguments validity.
-func checkListObjsArgs(ctx context.Context, bucket, prefix, marker string) error {
+func checkListObjsArgs(_ context.Context, bucket, prefix, _ string) error {
 	// Verify if bucket is valid.
 	if !isMinioMetaBucketName(bucket) && s3utils.CheckValidBucketNameStrict(bucket) != nil {
 		return BucketNameInvalid{Bucket: bucket}
@@ -79,7 +79,7 @@ func checkListObjsArgs(ctx context.Context, bucket, prefix, marker string) error
 }
 
 // Checks for all ListMultipartUploads arguments validity.
-func checkListMultipartArgs(ctx context.Context, bucket, prefix, keyMarker, uploadIDMarker, delimiter string) error {
+func checkListMultipartArgs(ctx context.Context, bucket, prefix, keyMarker, uploadIDMarker, _ string) error {
 	if err := checkListObjsArgs(ctx, bucket, prefix, keyMarker); err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func checkAbortMultipartArgs(ctx context.Context, bucket, object, uploadID strin
 }
 
 // Checks Object arguments validity.
-func checkObjectArgs(ctx context.Context, bucket, object string) error {
+func checkObjectArgs(_ context.Context, bucket, object string) error {
 	// Verify if bucket is valid.
 	if !isMinioMetaBucketName(bucket) && s3utils.CheckValidBucketNameStrict(bucket) != nil {
 		return BucketNameInvalid{Bucket: bucket}
@@ -158,7 +158,7 @@ func checkObjectArgs(ctx context.Context, bucket, object string) error {
 }
 
 // Checks for PutObject arguments validity.
-func checkPutObjectArgs(ctx context.Context, bucket, object string) error {
+func checkPutObjectArgs(_ context.Context, bucket, object string) error {
 	// Verify if bucket is valid.
 	if !isMinioMetaBucketName(bucket) && s3utils.CheckValidBucketNameStrict(bucket) != nil {
 		return BucketNameInvalid{Bucket: bucket}

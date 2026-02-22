@@ -591,7 +591,7 @@ func readAllRawFileInfo(ctx context.Context, disks []StorageAPI, bucket, object 
 	return rawFileInfos, g.Wait()
 }
 
-func pickLatestQuorumFilesInfo(ctx context.Context, rawFileInfos []RawFileInfo, errs []error, bucket, object string, readData, inclFreeVers bool) ([]FileInfo, []error) {
+func pickLatestQuorumFilesInfo(_ context.Context, rawFileInfos []RawFileInfo, errs []error, bucket, object string, readData, inclFreeVers bool) ([]FileInfo, []error) {
 	metadataArray := make([]*xlMetaV2, len(rawFileInfos))
 	metaFileInfos := make([]FileInfo, len(rawFileInfos))
 	metadataShallowVersions := make([][]xlMetaV2ShallowVersion, len(rawFileInfos))
@@ -2464,7 +2464,7 @@ func (er erasureObjects) RestoreTransitionedObject(ctx context.Context, bucket, 
 }
 
 // update restore status header in the metadata
-func (er erasureObjects) updateRestoreMetadata(ctx context.Context, bucket, object string, objInfo ObjectInfo, opts ObjectOptions) error {
+func (er erasureObjects) updateRestoreMetadata(ctx context.Context, bucket, object string, objInfo ObjectInfo, _ ObjectOptions) error {
 	oi := objInfo.Clone()
 	oi.metadataOnly = true // Perform only metadata updates.
 

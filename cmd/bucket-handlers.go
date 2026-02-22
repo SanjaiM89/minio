@@ -93,7 +93,7 @@ const (
 // -- If IP of the entry doesn't match, this means entry is
 //
 //	for another instance. Log an error to console.
-func initFederatorBackend(buckets []string, objLayer ObjectLayer) {
+func initFederatorBackend(buckets []string, _ ObjectLayer) {
 	if len(buckets) == 0 {
 		return
 	}

@@ -574,7 +574,7 @@ func (er *erasureObjects) healErasureSet(ctx context.Context, buckets []string, 
 	return nil
 }
 
-func healBucket(bucket string, scan madmin.HealScanMode) error {
+func healBucket(bucket string, _ madmin.HealScanMode) error {
 	// Get background heal sequence to send elements to heal
 	bgSeq, ok := globalBackgroundHealState.getHealSequenceByToken(bgHealingUUID)
 	if ok {

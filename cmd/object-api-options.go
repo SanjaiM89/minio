@@ -80,7 +80,7 @@ func getDefaultOpts(header http.Header, copySource bool, metadata map[string]str
 }
 
 // get ObjectOptions for GET calls from encryption headers
-func getOpts(ctx context.Context, r *http.Request, bucket, object string) (ObjectOptions, error) {
+func getOpts(_ context.Context, r *http.Request, bucket, object string) (ObjectOptions, error) {
 	var opts ObjectOptions
 
 	var partNumber int
@@ -365,7 +365,7 @@ func putOpts(ctx context.Context, bucket, object, vid string, hdrs http.Header, 
 	return opts, nil
 }
 
-func putOptsFromHeaders(ctx context.Context, hdr http.Header, metadata map[string]string) (opts ObjectOptions, err error) {
+func putOptsFromHeaders(_ context.Context, hdr http.Header, metadata map[string]string) (opts ObjectOptions, err error) {
 	mtimeStr := strings.TrimSpace(hdr.Get(xhttp.MinIOSourceMTime))
 	var mtime time.Time
 	if mtimeStr != "" {
@@ -443,7 +443,7 @@ func copyDstOpts(ctx context.Context, r *http.Request, bucket, object string, me
 }
 
 // get ObjectOptions for Copy calls with encryption headers provided on the source side
-func copySrcOpts(ctx context.Context, r *http.Request, bucket, object string) (ObjectOptions, error) {
+func copySrcOpts(_ context.Context, r *http.Request, _, _ string) (ObjectOptions, error) {
 	var opts ObjectOptions
 
 	// default case of passing encryption headers to backend
@@ -455,7 +455,7 @@ func copySrcOpts(ctx context.Context, r *http.Request, bucket, object string) (O
 }
 
 // get ObjectOptions for CompleteMultipart calls
-func completeMultipartOpts(ctx context.Context, r *http.Request, bucket, object string) (opts ObjectOptions, err error) {
+func completeMultipartOpts(_ context.Context, r *http.Request, bucket, object string) (opts ObjectOptions, err error) {
 	mtimeStr := strings.TrimSpace(r.Header.Get(xhttp.MinIOSourceMTime))
 	var mtime time.Time
 	if mtimeStr != "" {

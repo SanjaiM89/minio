@@ -305,7 +305,7 @@ var errInvalidReplicateDecisionFormat = fmt.Errorf("ReplicateDecision has invali
 
 // parse k-v pairs of target ARN to stringified ReplicateTargetDecision delimited by ',' into a
 // ReplicateDecision struct
-func parseReplicateDecision(ctx context.Context, bucket, s string) (r ReplicateDecision, err error) {
+func parseReplicateDecision(_ context.Context, _, s string) (r ReplicateDecision, err error) {
 	r = ReplicateDecision{
 		targetsMap: make(map[string]replicateTargetDecision),
 	}
@@ -399,7 +399,7 @@ func (rs *ReplicationState) targetState(arn string) (r replicatedTargetInfo) {
 }
 
 // getReplicationState returns replication state using target replicated info for the targets
-func getReplicationState(rinfos replicatedInfos, prevState ReplicationState, vID string) ReplicationState {
+func getReplicationState(rinfos replicatedInfos, prevState ReplicationState, _ string) ReplicationState {
 	rs := ReplicationState{
 		ReplicateDecisionStr: prevState.ReplicateDecisionStr,
 		ResetStatusesMap:     prevState.ResetStatusesMap,
@@ -740,7 +740,7 @@ func (rs *BucketReplicationResyncStatus) cloneTgtStats() (m map[string]TargetRep
 	return m
 }
 
-func newBucketResyncStatus(bucket string) BucketReplicationResyncStatus {
+func newBucketResyncStatus(_ string) BucketReplicationResyncStatus {
 	return BucketReplicationResyncStatus{
 		TargetsMap: make(map[string]TargetReplicationResyncStatus),
 		Version:    resyncMetaVersion,

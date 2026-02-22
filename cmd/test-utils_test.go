@@ -1462,7 +1462,7 @@ func getListMultipartUploadsURLWithParams(endPoint, bucketName, prefix, keyMarke
 }
 
 // return URL for a listing parts on a given upload id.
-func getListMultipartURLWithParams(endPoint, bucketName, objectName, uploadID, maxParts, partNumberMarker, encoding string) string {
+func getListMultipartURLWithParams(endPoint, bucketName, objectName, uploadID, maxParts, partNumberMarker, _ string) string {
 	queryValues := url.Values{}
 	queryValues.Set("uploadId", uploadID)
 	queryValues.Set("max-parts", maxParts)
@@ -2355,7 +2355,7 @@ func uploadTestObject(t *testing.T, apiRouter http.Handler, creds auth.Credentia
 			apiRouter.ServeHTTP(rec, req)
 			checkRespErr(rec, http.StatusOK)
 			header := rec.Header()
-			if v, ok := header["ETag"]; ok {
+			if v, ok := header[http.CanonicalHeaderKey("ETag")]; ok {
 				etag := v[0]
 				if etag == "" {
 					t.Fatalf("Unexpected empty etag")

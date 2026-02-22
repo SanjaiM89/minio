@@ -166,7 +166,7 @@ func (ies *IAMEtcdStore) loadPolicyDoc(ctx context.Context, policy string, m map
 	return nil
 }
 
-func (ies *IAMEtcdStore) getPolicyDocKV(ctx context.Context, kvs *mvccpb.KeyValue, m map[string]PolicyDoc) error {
+func (ies *IAMEtcdStore) getPolicyDocKV(_ context.Context, kvs *mvccpb.KeyValue, m map[string]PolicyDoc) error {
 	data, err := decryptData(kvs.Value, string(kvs.Key))
 	if err != nil {
 		if err == errConfigNotFound {

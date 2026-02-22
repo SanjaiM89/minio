@@ -63,7 +63,7 @@ var (
 
 const (
 	healMetricsNamespace = "self_heal"
-	cacheNamespace       = "cache"
+	_cacheNamespace       = "cache"
 	s3Namespace          = "s3"
 	bucketNamespace      = "bucket"
 	minioNamespace       = "minio"

@@ -472,7 +472,7 @@ func (r *ReplicationStats) getLatestReplicationStats(bucket string) (s BucketSta
 	return r.calculateBucketReplicationStats(bucket, bucketStats)
 }
 
-func (r *ReplicationStats) incQ(bucket string, sz int64, isDeleteRepl bool, opType replication.Type) {
+func (r *ReplicationStats) incQ(bucket string, sz int64, _ bool, _ replication.Type) {
 	r.qCache.Lock()
 	defer r.qCache.Unlock()
 	v, ok := r.qCache.bucketStats[bucket]
@@ -486,7 +486,7 @@ func (r *ReplicationStats) incQ(bucket string, sz int64, isDeleteRepl bool, opTy
 	atomic.AddInt64(&r.qCache.srQueueStats.nowCount, 1)
 }
 
-func (r *ReplicationStats) decQ(bucket string, sz int64, isDelMarker bool, opType replication.Type) {
+func (r *ReplicationStats) decQ(bucket string, sz int64, _ bool, _ replication.Type) {
 	r.qCache.Lock()
 	defer r.qCache.Unlock()
 	v, ok := r.qCache.bucketStats[bucket]

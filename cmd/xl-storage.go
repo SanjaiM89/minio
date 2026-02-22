@@ -520,7 +520,7 @@ func (s *xlStorage) readMetadataWithDMTime(ctx context.Context, itemPath string)
 }
 
 func (s *xlStorage) readMetadata(ctx context.Context, itemPath string) ([]byte, error) {
-	return xioutil.WithDeadline[[]byte](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) ([]byte, error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) ([]byte, error) {
 		buf, _, err := s.readMetadataWithDMTime(ctx, itemPath)
 		return buf, err
 	})
@@ -949,7 +949,7 @@ func (s *xlStorage) ListVols(ctx context.Context) (volsInfo []VolInfo, err error
 }
 
 // List all the volumes from drivePath.
-func listVols(ctx context.Context, dirPath string) ([]VolInfo, error) {
+func listVols(_ context.Context, dirPath string) ([]VolInfo, error) {
 	if err := checkPathLength(dirPath); err != nil {
 		return nil, err
 	}
@@ -1094,7 +1094,7 @@ func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, fis
 	s.RUnlock()
 
 	var legacyJSON bool
-	buf, err := xioutil.WithDeadline[[]byte](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) ([]byte, error) {
+	buf, err := xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) ([]byte, error) {
 		buf, _, err := s.readAllDataWithDMTime(ctx, volume, volumeDir, pathJoin(volumeDir, path, xlStorageFormatFile))
 		if err != nil && !errors.Is(err, errFileNotFound) {
 			return nil, err
@@ -1286,7 +1286,7 @@ func (s *xlStorage) moveToTrashNoDeadline(filePath string, recursive, immediateP
 }
 
 func (s *xlStorage) readAllData(ctx context.Context, volume, volumeDir string, filePath string) (buf []byte, err error) {
-	return xioutil.WithDeadline[[]byte](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) ([]byte, error) {
+	return xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) ([]byte, error) {
 		data, _, err := s.readAllDataWithDMTime(ctx, volume, volumeDir, filePath)
 		return data, err
 	})
@@ -2413,7 +2413,7 @@ func (s *xlStorage) CheckParts(ctx context.Context, volume string, path string, 
 	}
 
 	for i, part := range fi.Parts {
-		resp.Results[i], err = xioutil.WithDeadline[int](ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (int, error) {
+		resp.Results[i], err = xioutil.WithDeadline(ctx, globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (int, error) {
 			return s.checkPart(volumeDir, path, fi.DataDir, part.Number, fi.Erasure.ShardFileSize(part.Size), skipAccessChecks(volume)), nil
 		})
 		if err != nil {

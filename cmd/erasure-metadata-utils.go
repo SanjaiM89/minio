@@ -308,20 +308,20 @@ func shuffleWithDist[T any](input []T, distribution []int) []T {
 
 // Return shuffled partsMetadata depending on distribution.
 func shufflePartsMetadata(partsMetadata []FileInfo, distribution []int) []FileInfo {
-	return shuffleWithDist[FileInfo](partsMetadata, distribution)
+	return shuffleWithDist(partsMetadata, distribution)
 }
 
 // shuffleCheckParts - shuffle CheckParts slice depending on the
 // erasure distribution.
 func shuffleCheckParts(parts []int, distribution []int) []int {
-	return shuffleWithDist[int](parts, distribution)
+	return shuffleWithDist(parts, distribution)
 }
 
 // shuffleDisks - shuffle input disks slice depending on the
 // erasure distribution. Return shuffled slice of disks with
 // their expected distribution.
 func shuffleDisks(disks []StorageAPI, distribution []int) []StorageAPI {
-	return shuffleWithDist[StorageAPI](disks, distribution)
+	return shuffleWithDist(disks, distribution)
 }
 
 // evalDisks - returns a new slice of disks where nil is set if
@@ -350,7 +350,7 @@ var (
 
 // calculatePartSizeFromIdx calculates the part size according to input index.
 // returns error if totalSize is -1, partSize is 0, partIndex is 0.
-func calculatePartSizeFromIdx(ctx context.Context, totalSize int64, partSize int64, partIndex int) (currPartSize int64, err error) {
+func calculatePartSizeFromIdx(_ context.Context, totalSize int64, partSize int64, partIndex int) (currPartSize int64, err error) {
 	if totalSize < -1 {
 		return 0, errInvalidArgument
 	}
