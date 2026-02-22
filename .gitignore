@@ -56,3 +56,4 @@ xl-meta
 
 .env
 node_modules/
+minio_tg
